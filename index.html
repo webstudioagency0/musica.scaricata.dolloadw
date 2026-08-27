@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Library</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0a0a] text-white min-h-screen">
+<div class="max-w-4xl mx-auto p-4 md:p-8">
+  <h1 class="text-4xl font-black mb-2">🎵 Music Library</h1>
+  <p class="text-zinc-500 mb-6">Incolla URL diretto di file audio (mp3/wav/ogg/m4a/flac)</p>
+
+  <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl flex flex-col md:flex-row gap-3 mb-4">
+    <input id="urlInput" placeholder="https://esempio.com/brano.mp3" class="flex-1 p-4 rounded-xl bg-black border border-zinc-800 outline-none focus:border-white">
+    <button onclick="download()" id="btn" class="bg-white text-black px-8 py-4 rounded-xl font-black hover:bg-zinc-200">Scarica</button>
+  </div>
+  <p id="msg" class="text-sm mb-6 h-5"></p>
+
+  <div id="library" class="grid gap-3"></div>
+</div>
+
+<div id="playerBar" class="fixed bottom-0 left-0 right-0 bg-zinc-900 border-t border-zinc-800 p-4 hidden">
+  <div class="max-w-4xl mx-auto flex items-center gap-4">
+    <div class="flex-1"><p id="nowTitle" class="font-bold"></p><p id="nowFile" class="text-xs text-zinc-500"></p></div>
+    <audio id="audio" controls class="flex-1"></audio>
+    <button onclick="closePlayer()" class="text-zinc-500">✕</button>
+  </div>
+</div>
+
+<script>
+// Storage con IndexedDB per file reali
+let db;
+const req = indexedDB.open('musicDB',1);
+req.onupgradeneeded = e => { e.target.result.createObjectStore('tracks', {keyPath:'id'}); };
+req.onsuccess = e => { db=e.target.result; render(); };
+
+function saveTrack(track){ return new Promise((res,rej)=>{ const tx=db.transaction('tracks','readwrite'); tx.objectStore('tracks').put(track); tx.oncomplete=()=>res(); }); }
+function getAll(){ return new Promise((res,rej)=>{ const tx=db.transaction('tracks','readonly'); const r=tx.objectStore('tracks').getAll(); r.onsuccess=()=>res(r.result); }); }
+function delTrack(id){ return new Promise((res)=>{ const tx=db.transaction('tracks','readwrite'); tx.objectStore('tracks').delete(id); tx.oncomplete=()=>res(); }); }
+
+async function download(){
+  const url = document.getElementById('urlInput').value.trim();
+  const msg = document.getElementById('msg');
+  const btn = document.getElementById('btn');
+  if(!url){ msg.textContent='Inserisci un URL'; msg.className='text-red-400 text-sm mb-6'; return; }
+  // sicurezza base
+  try{ const u=new URL(url); if(!['http:','https:'].includes(u.protocol)) throw 0; if(u.hostname.includes('spotify.com')||u.hostname.includes('youtube.com')) throw new Error('Piattaforme streaming bloccate'); }catch{ msg.textContent='URL non valido o piattaforma non consentita'; msg.className='text-red-400 text-sm mb-6'; return; }
+
+  btn.textContent='...'; msg.textContent='Scarico in corso...'; msg.className='text-zinc-400 text-sm mb-6';
+  try{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('Download fallito '+res.status);
+    const ct = res.headers.get('content-type')||'';
+    if(!ct.startsWith('audio/') && !url.match(/\.(mp3|wav|ogg|m4a|flac)$/i)) throw new Error('Non è un file audio: '+ct);
+    const blob = await res.blob();
+    if(blob.size>100*1024*1024) throw new Error('File troppo grande >100MB');
+    const filename = url.split('/').pop().split('?')[0] || 'brano.mp3';
+    const id = Date.now().toString();
+    const track = { id, title: filename.replace(/\.[^/.]+$/,''), filename, mime: blob.type||'audio/mpeg', size: blob.size, blob, url, date: new Date().toLocaleString() };
+    await saveTrack(track);
+    document.getElementById('urlInput').value='';
+    msg.textContent='Aggiunto!'; msg.className='text-green-400 text-sm mb-6';
+    render();
+  }catch(e){
+    msg.textContent = 'Errore: '+e.message + ' (Se è CORS, il sito non permette download diretto)';
+    msg.className='text-red-400 text-sm mb-6';
+  }finally{ btn.textContent='Scarica'; }
+}
+
+async function render(){
+  const tracks = await getAll();
+  const lib = document.getElementById('library');
+  if(!tracks.length){ lib.innerHTML='<p class="text-zinc-600 text-center py-10">Nessun brano. Incolla un URL sopra.</p>'; return; }
+  lib.innerHTML = tracks.map(t=>`
+    <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl flex items-center justify-between gap-4">
+      <div class="flex-1 overflow-hidden"><p class="font-bold truncate">${t.title}</p><p class="text-xs text-zinc-500 truncate">${t.filename} • ${(t.size/1024/1024).toFixed(2)}MB • ${t.date}</p></div>
+      <div class="flex gap-2"><button onclick="play('${t.id}')" class="bg-white text-black px-4 py-2 rounded-full font-bold">▶ Play</button><button onclick="removeTrack('${t.id}')" class="bg-zinc-800 px-3 py-2 rounded-full">🗑</button></div>
+    </div>
+  `).join('');
+}
+
+async function play(id){
+  const tracks = await getAll(); const t = tracks.find(x=>x.id===id); if(!t) return;
+  document.getElementById('playerBar').classList.remove('hidden');
+  document.getElementById('nowTitle').textContent=t.title;
+  document.getElementById('nowFile').textContent=t.filename;
+  const audio=document.getElementById('audio');
+  audio.src = URL.createObjectURL(t.blob);
+  audio.play();
+}
+function closePlayer(){ document.getElementById('playerBar').classList.add('hidden'); document.getElementById('audio').pause(); }
+async function removeTrack(id){ if(!confirm('Eliminare?')) return; await delTrack(id); render(); }
+</script>
+</body>
+</html>
